@@ -1,15 +1,18 @@
 @echo off
 :: ============================================================
-:: download.bat
-:: Description : Downloads daily JHT production CSV files from
-::               FTP server to local Office PC folder
+:: extract.bat
+:: Description : Extracts daily production data from JHT machine
+::               SQL database and uploads CSV files to FTP server
 :: Author      : FineMan11
-:: Scheduled   : Daily @ 02:00 via Windows Task Scheduler
+:: Scheduled   : Daily @ 23:59 hrs via Windows Task Scheduler
 :: ============================================================
 
 :: Get today's date in YYYYMMDD format
 for /f "tokens=2 delims==" %%G in ('wmic os get LocalDateTime /value') do set DT=%%G
 set DATE_TODAY=%DT:~0,4%%DT:~4,2%%DT:~6,2%
+
+:: Get machine hostname
+for /f "tokens=*" %%a in ('hostname') do set MACHINE=%%a
 
 :: ── FTP Configuration ──────────────────────────────────────
 :: Replace these with your actual FTP server details
@@ -19,36 +22,47 @@ set FTP_PASS=YOUR_FTP_PASSWORD
 set FTP_FOLDER=/MAINT/WW_JAM/DATA_EXTRACTION
 :: ───────────────────────────────────────────────────────────
 
-:: ── Local Save Path ─────────────────────────────────────────
-:: Replace this with your actual local destination folder
-set SAVE_PATH=YOUR_LOCAL_SAVE_PATH
-:: Example: set SAVE_PATH=C:\JHT_Data\Downloads
-:: ───────────────────────────────────────────────────────────
+:: Create local folders if they don't exist
+if not exist "D:\JHT_Data" mkdir "D:\JHT_Data"
+if not exist "D:\JHT_Data\SPCHistory" mkdir "D:\JHT_Data\SPCHistory"
+if not exist "D:\JHT_Data\History" mkdir "D:\JHT_Data\History"
+if not exist "D:\JHT_Data\Log" mkdir "D:\JHT_Data\Log"
 
 echo ============================
-echo Downloading JHT Data
-echo Date : %DATE_TODAY%
-echo Time : %time%
+echo Machine : %MACHINE%
+echo Date    : %DATE_TODAY%
+echo Time    : %time%
 echo ============================
 
-:: Build FTP download script
-echo open %FTP_SERVER%> "%SAVE_PATH%\ftp_download.txt"
-echo %FTP_USER%>> "%SAVE_PATH%\ftp_download.txt"
-echo %FTP_PASS%>> "%SAVE_PATH%\ftp_download.txt"
-echo cd %FTP_FOLDER%>> "%SAVE_PATH%\ftp_download.txt"
-echo lcd "%SAVE_PATH%">> "%SAVE_PATH%\ftp_download.txt"
-echo prompt>> "%SAVE_PATH%\ftp_download.txt"
-echo mget *.csv>> "%SAVE_PATH%\ftp_download.txt"
-echo bye>> "%SAVE_PATH%\ftp_download.txt"
+:: Step 1 — Extract SPCHistory from SQL
+echo [1/4] Extracting SPCHistory...
+sqlcmd -S .\SQLEXPRESS -d PnPhDB -Q "SELECT * FROM SPCHistory WHERE DateCode >= CONVERT(varchar, GETDATE(), 112)" -s"," -W -o "D:\JHT_Data\SPCHistory\%MACHINE%_SPCHistory_%DATE_TODAY%.csv"
+if %ERRORLEVEL% EQU 0 (echo SPCHistory OK!) else (echo SPCHistory FAILED!)
 
-:: Execute FTP Download
-echo Downloading files...
-ftp -s:"%SAVE_PATH%\ftp_download.txt"
+:: Step 2 — Extract History from SQL
+echo [2/4] Extracting History...
+sqlcmd -S .\SQLEXPRESS -d PnPhDB -Q "SELECT * FROM History WHERE DateTime >= CONVERT(varchar, GETDATE(), 112)" -s"," -W -o "D:\JHT_Data\History\%MACHINE%_History_%DATE_TODAY%.csv"
+if %ERRORLEVEL% EQU 0 (echo History OK!) else (echo History FAILED!)
+
+:: Step 3 — Build FTP script
+echo [3/4] Preparing FTP Upload...
+echo open %FTP_SERVER%> "D:\JHT_Data\ftp_script.txt"
+echo %FTP_USER%>> "D:\JHT_Data\ftp_script.txt"
+echo %FTP_PASS%>> "D:\JHT_Data\ftp_script.txt"
+echo cd %FTP_FOLDER%>> "D:\JHT_Data\ftp_script.txt"
+echo put "D:\JHT_Data\SPCHistory\%MACHINE%_SPCHistory_%DATE_TODAY%.csv">> "D:\JHT_Data\ftp_script.txt"
+echo put "D:\JHT_Data\History\%MACHINE%_History_%DATE_TODAY%.csv">> "D:\JHT_Data\ftp_script.txt"
+echo bye>> "D:\JHT_Data\ftp_script.txt"
+
+:: Step 4 — Execute FTP Upload
+echo [4/4] Uploading to FTP...
+ftp -s:"D:\JHT_Data\ftp_script.txt"
+if %ERRORLEVEL% EQU 0 (echo FTP Upload OK!) else (echo FTP Upload FAILED!)
 
 echo ============================
-echo DONE! Files saved to %SAVE_PATH%
+echo DONE! %MACHINE% %DATE_TODAY%
 echo ============================
 
 :: Log completion
-echo %DATE_TODAY% %time% - Download Completed >> "%SAVE_PATH%\download_log.txt"
+echo %DATE_TODAY% %time% - %MACHINE% - Completed >> "D:\JHT_Data\Log\log.txt"
 exit
